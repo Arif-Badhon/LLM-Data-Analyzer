@@ -1,74 +1,69 @@
 """
-Configuration management for FastAPI backend
-Loads ALL settings from .env.local at project ROOT
+Configuration for LLM Data Analyzer
+Supports both MLX (local) and Docker Model Runner modes
+All values from .env.local - NO hardcoded defaults
 """
-from pydantic_settings import BaseSettings
-from pathlib import Path
-from typing import List
 import logging
+from functools import lru_cache
+from pydantic_settings import BaseSettings
 
+logger = logging.getLogger(__name__)
 
-def find_env_file() -> Path:
-    """Find .env.local by checking multiple paths"""
-    possible_paths = [
-        Path("/Users/arif/Projects/Personal/LLM-Data-Analyzer/.env.local"),
-        Path.cwd() / ".env.local",
-        Path(__file__).parent.parent.parent / ".env.local",
-        Path(__file__).parent.parent / ".env.local",
-    ]
-    
-    for path in possible_paths:
-        if path.exists():
-            return path
-    
-    raise FileNotFoundError(
-        f"❌ .env.local not found! Checked:\n" + 
-        "\n".join([f"  - {p}" for p in possible_paths])
-    )
-
+# Conditional MLX import
+HAS_MLX = False
 
 class Settings(BaseSettings):
-    """Application settings - ALL loaded from .env.local"""
+    """Main settings - all from .env.local"""
     
-    # API Configuration
+    # ===== CORE SETTINGS =====
     fastapi_env: str
-    api_host: str
-    api_port: int
+    fastapi_debug: bool
     log_level: str
     
-    # LLM Configuration
-    llm_model_name: str
+    # ===== LLM MODE SELECTION =====
+    # True = Use MLX locally (macOS Apple Silicon)
+    # False = Use Docker Model Runner
+    debug: bool
+    
+    # ===== MLX MODE (DEBUG=true) =====
+    llm_model_name_mlx: str
     llm_max_tokens: int
     llm_temperature: float
     llm_device: str
     
-    # File Upload
-    max_file_size: int
-    upload_timeout: int
+    # ===== DOCKER MODEL RUNNER MODE (DEBUG=false) =====
+    docker_model_runner_url: str
+    llm_model_name_docker: str
+    docker_timeout: int
     
-    # CORS
-    cors_origins: List[str]
+    # ===== DATA PROCESSING =====
+    max_file_size_mb: int
+    
+    # Hardcoded (lists can't be parsed from env vars)
+    supported_file_types: list = ["csv", "xlsx", "xls"]
     
     class Config:
-        env_file = str(find_env_file())
+        env_file = ".env.local"
         case_sensitive = False
-        extra = "ignore"
 
+@lru_cache
+def get_settings():
+    """Get cached settings from .env.local"""
+    return Settings()
 
-settings = Settings()
+# Check if MLX is available (only needed for DEBUG=true)
+try:
+    import mlx.core
+    from mlx_lm import load
+    from mlx_lm.generate import generate
+    HAS_MLX = True
+    logger.info("✅ MLX libraries available")
+except ImportError:
+    HAS_MLX = False
+    logger.warning("⚠️  MLX not available (will use Docker Model Runner or mock)")
 
+settings = get_settings()
 
-def get_logger(name: str) -> logging.Logger:
-    """Get configured logger instance"""
-    logger = logging.getLogger(name)
-    
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    
-    logger.setLevel(settings.log_level)
-    return logger
+# Export both settings and MLX availability
+__all__ = ["settings", "get_settings", "HAS_MLX"]
+

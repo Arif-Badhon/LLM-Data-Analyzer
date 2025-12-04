@@ -1,17 +1,281 @@
-"""LLM Service - handles MLX Llama 2 inference"""
-from app.config import get_logger
+"""
+Dual-mode LLM Service
+- DEBUG=true: Uses MLX with Apple Silicon GPU
+- DEBUG=false: Uses Docker Model Runner (OpenAI-compatible API)
+- Fallback: Mock mode if neither available
+"""
+import asyncio
+import logging
+from abc import ABC, abstractmethod
+from typing import List, Optional
+import httpx
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
-class LLMService:
-    """Wrapper around MLX LLM for convenient inference"""
+# Import MLX conditionally
+try:
+    from mlx_lm import load
+    from mlx_lm.generate import generate
+    HAS_MLX = True
+except ImportError:
+    HAS_MLX = False
+
+
+class BaseLLMService(ABC):
+    """Abstract base class for LLM services"""
     
-    def __init__(self):
-        """Initialize LLM Service - actual LLM loading in Phase 2"""
-        self.llm = None
-        logger.info("LLMService initialized (Phase 2 will load actual model)")
+    def __init__(self, model_name: str, max_tokens: int, temperature: float):
+        self.model_name = model_name
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.is_loaded = False
+        self.is_mock = False
+        self.logger = logging.getLogger(__name__)
     
-    async def chat(self, message: str, history: list = None) -> str:
-        """Process user message and return LLM response"""
-        logger.info(f"Chat request: {message}")
-        return "LLM response will be here in Phase 2"
+    @abstractmethod
+    async def load_model(self) -> bool:
+        """Load/initialize the model"""
+        pass
+    
+    @abstractmethod
+    async def generate(self, prompt: str) -> str:
+        """Generate text from prompt"""
+        pass
+    
+    async def chat(self, messages: List[dict], system_prompt: str = None) -> str:
+        """Chat interface"""
+        prompt = self._build_prompt(messages, system_prompt)
+        return await self.generate(prompt)
+    
+    def _build_prompt(self, messages: List[dict], system_prompt: str = None) -> str:
+        """Build prompt from chat messages"""
+        prompt_parts = []
+        
+        if system_prompt:
+            prompt_parts.append(f"System: {system_prompt}\n\n")
+        
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            prompt_parts.append(f"{role.capitalize()}: {content}\n")
+        
+        prompt_parts.append("Assistant: ")
+        return "".join(prompt_parts)
+
+
+class LLMServiceMLX(BaseLLMService):
+    """MLX implementation for Apple Silicon (DEBUG=true)"""
+    
+    def __init__(self, model_name: str, max_tokens: int, temperature: float, device: str):
+        super().__init__(model_name, max_tokens, temperature)
+        self.device = device
+        self.model = None
+        self.tokenizer = None
+    
+    async def load_model(self) -> bool:
+        """Load MLX model"""
+        if self.is_loaded:
+            return True
+        
+        if not HAS_MLX:
+            self.logger.error("❌ MLX not available")
+            return False
+        
+        try:
+            self.logger.info(f"🔄 Loading MLX model: {self.model_name}")
+            loop = asyncio.get_event_loop()
+            self.model, self.tokenizer = await loop.run_in_executor(
+                None,
+                self._load_model_sync
+            )
+            self.is_loaded = True
+            self.logger.info(f"✅ MLX model loaded: {self.model_name}")
+            return True
+        except Exception as e:
+            self.logger.error(f"❌ MLX model loading failed: {e}")
+            return False
+    
+    def _load_model_sync(self):
+        """Synchronous MLX model loading"""
+        if not HAS_MLX:
+            raise RuntimeError("MLX not installed")
+        
+        self.logger.info("🔄 Starting model download/load...")
+        model, tokenizer = load(self.model_name)
+        self.logger.info("✅ Model download/load complete")
+        return model, tokenizer
+    
+    async def generate(self, prompt: str) -> str:
+        """Generate with MLX"""
+        if not self.is_loaded:
+            raise RuntimeError("Model not loaded")
+        
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                self._generate_sync,
+                prompt
+            )
+            return response
+        except Exception as e:
+            self.logger.error(f"❌ MLX generation failed: {e}")
+            raise
+    
+    def _generate_sync(self, prompt: str) -> str:
+        """Synchronous text generation with MLX"""
+        response = generate(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            prompt=prompt,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            verbose=False
+        )
+        return response
+
+
+class LLMServiceDockerModelRunner(BaseLLMService):
+    """Docker Model Runner implementation (DEBUG=false)"""
+    
+    def __init__(self, model_name: str, max_tokens: int, temperature: float, docker_url: str, timeout: int = 300):
+        super().__init__(model_name, max_tokens, temperature)
+        self.docker_url = docker_url
+        self.timeout = timeout
+        self.client = None
+    
+    async def load_model(self) -> bool:
+        """Initialize Docker Model Runner connection"""
+        if self.is_loaded:
+            return True
+        
+        try:
+            self.logger.info(f"🔄 Connecting to Docker Model Runner: {self.docker_url}")
+            # Create async HTTP client
+            self.client = httpx.AsyncClient(timeout=self.timeout)
+            
+            # Test connection with health check
+            response = await self.client.get(f"{self.docker_url}/models")
+            
+            if response.status_code == 200:
+                self.is_loaded = True
+                self.logger.info(f"✅ Docker Model Runner connected")
+                return True
+            else:
+                self.logger.error(f"❌ Docker Model Runner returned {response.status_code}")
+                return False
+        except Exception as e:
+            self.logger.error(f"❌ Docker Model Runner connection failed: {e}")
+            return False
+    
+    async def generate(self, prompt: str) -> str:
+        """Generate with Docker Model Runner (OpenAI-compatible API)"""
+        if not self.is_loaded:
+            raise RuntimeError("Docker Model Runner not connected")
+        
+        try:
+            payload = {
+                "model": self.model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
+            }
+            
+            response = await self.client.post(
+                f"{self.docker_url}/chat/completions",
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result["choices"]["message"]["content"]
+            else:
+                self.logger.error(f"❌ Docker Model Runner error: {response.text}")
+                raise RuntimeError(f"Model Runner error: {response.status_code}")
+        except Exception as e:
+            self.logger.error(f"❌ Docker Model Runner generation failed: {e}")
+            raise
+    
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.client:
+            await self.client.aclose()
+
+
+class LLMServiceMock(BaseLLMService):
+    """Mock implementation as fallback"""
+    
+    def __init__(self, model_name: str, max_tokens: int, temperature: float):
+        super().__init__(model_name, max_tokens, temperature)
+        self.is_mock = True
+    
+    async def load_model(self) -> bool:
+        """Mock loading"""
+        self.logger.warning("⚠️  Using MOCK mode (no real LLM available)")
+        self.is_loaded = True
+        return True
+    
+    async def generate(self, prompt: str) -> str:
+        """Generate mock response"""
+        return self._generate_mock_response(prompt)
+    
+    def _generate_mock_response(self, prompt: str) -> str:
+        """Generate intelligent mock responses"""
+        prompt_lower = prompt.lower()
+        
+        if "hello" in prompt_lower or "hi" in prompt_lower:
+            return "Hello! I'm running in mock mode (no LLM available). I can still help you analyze CSV and Excel files!"
+        elif "analyze" in prompt_lower or "data" in prompt_lower:
+            return "I can analyze your data with statistical analysis, trend detection, outlier detection, and correlation matrices."
+        elif "what can" in prompt_lower or "help" in prompt_lower:
+            return "I can help with: 1) Chatting, 2) Uploading files (CSV/Excel), 3) Statistical analysis, 4) Trend detection, 5) Anomaly detection."
+        elif "machine learning" in prompt_lower:
+            return "Machine learning is about creating algorithms that can learn from data and make predictions without being explicitly programmed."
+        else:
+            return f"Mock response: I processed your prompt about '{prompt[:40]}...' - please note I'm in mock mode with no real LLM."
+
+
+def get_llm_service(debug: bool, mlx_config: dict = None, docker_config: dict = None) -> BaseLLMService:
+    """
+    Factory function to get appropriate LLM service
+    
+    Args:
+        debug: If True, use MLX; if False, use Docker Model Runner
+        mlx_config: Config dict for MLX (model_name, max_tokens, temperature, device)
+        docker_config: Config dict for Docker Model Runner (model_name, max_tokens, temperature, url, timeout)
+    
+    Returns:
+        Appropriate LLM service instance
+    """
+    
+    if debug:
+        # Try MLX first
+        if HAS_MLX:
+            config = mlx_config or {
+                "model_name": "mlx-community/Llama-3.2-3B-Instruct-4bit",
+                "max_tokens": 512,
+                "temperature": 0.7,
+                "device": "auto"
+            }
+            logger.info("📌 Mode: MLX (DEBUG=true)")
+            return LLMServiceMLX(**config)
+        else:
+            logger.warning("⚠️  MLX not available, falling back to mock")
+            return LLMServiceMock(
+                model_name="mock-mlx",
+                max_tokens=512,
+                temperature=0.7
+            )
+    else:
+        # Use Docker Model Runner
+        config = docker_config or {
+            "model_name": "Llama-3.2-3B-Instruct",
+            "max_tokens": 512,
+            "temperature": 0.7,
+            "docker_url": "http://model-runner.docker.internal/engines/llama.cpp/v1",
+            "timeout": 300
+        }
+        logger.info("📌 Mode: Docker Model Runner (DEBUG=false)")
+        return LLMServiceDockerModelRunner(**config)
