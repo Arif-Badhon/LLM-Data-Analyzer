@@ -92,11 +92,13 @@ async def upload_file(file: UploadFile = File(...)):
         logger.info(f"📁 Processing file: {file.filename}")
         data, file_type = await data_processor.process_file(file)
         
+        # Get column names from first row (if data exists)
+        column_names = list(data[0].keys()) if data else []
+        
         # Get preview (first 5 rows)
         preview = data[:5] if data else []
         
-        # Get column names
-        column_names = list(data.keys()) if data else []
+        logger.info(f"✅ Upload successful: {len(data)} rows, {len(column_names)} columns")
         
         return FileUploadResponse(
             filename=file.filename,
@@ -108,7 +110,7 @@ async def upload_file(file: UploadFile = File(...)):
             file_type=file_type
         )
     except ValueError as e:
-        logger.error(f"Validation error: {e}")
+        logger.error(f"❌ Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"❌ Upload error: {e}")
