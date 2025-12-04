@@ -1,120 +1,94 @@
 """
-Data file processing - CSV and Excel support
+Data Processing Service
+Handles CSV and Excel file uploads and processing
 """
-import csv
-import io
-from typing import List, Dict, Any
-from fastapi import UploadFile
 import logging
+import pandas as pd
+from pathlib import Path
+from fastapi import UploadFile
 
-try:
-    import openpyxl
-    HAS_OPENPYXL = True
-except ImportError:
-    HAS_OPENPYXL = False
+logger = logging.getLogger(__name__)
 
 
 class DataProcessor:
-    """Process uploaded data files"""
+    """Process uploaded data files (CSV, Excel)"""
+    
+    SUPPORTED_FORMATS = ["csv", "xlsx", "xls"]
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
-        self.max_file_size = 10 * 1024 * 1024  # 10 MB
+        self.temp_dir = Path("./uploads")
+        self.temp_dir.mkdir(exist_ok=True)
     
-    async def process_file(self, file: UploadFile) -> tuple[List[Dict[str, Any]], str]:
-        """Process uploaded file - returns (data, file_type)"""
-        content = await file.read()
+    async def process_file(self, file: UploadFile) -> tuple:
+        """
+        Process uploaded file (CSV or Excel)
         
-        if len(content) > self.max_file_size:
-            raise ValueError(f"File too large. Max: {self.max_file_size / 1024 / 1024:.1f} MB")
-        
-        if file.filename.endswith('.csv'):
-            return self._process_csv(content), 'csv'
-        elif file.filename.endswith('.xlsx') or file.filename.endswith('.xls'):
-            return self._process_excel(content), 'excel'
-        else:
-            raise ValueError(f"Unsupported file format: {file.filename}")
-    
-    def _process_csv(self, content: bytes) -> List[Dict[str, Any]]:
-        """Process CSV file"""
+        Returns:
+            tuple: (data_list, file_type)
+        """
         try:
-            text_content = content.decode('utf-8')
-            reader = csv.DictReader(io.StringIO(text_content))
-            data = []
-            for row in reader:
-                # Convert numeric strings to numbers
-                processed_row = {}
-                for key, value in row.items():
-                    processed_row[key] = self._try_convert_to_number(value)
-                data.append(processed_row)
+            # Validate file type
+            file_ext = self._get_file_extension(file.filename)
+            if file_ext not in self.SUPPORTED_FORMATS:
+                raise ValueError(f"Unsupported file type: {file_ext}")
             
-            if not data:
-                raise ValueError("CSV file is empty")
+            logger.info(f"🔄 Processing file: {file.filename}")
             
-            self.logger.info(f"✅ Processed CSV: {len(data)} rows")
+            # Save file temporarily
+            file_path = self.temp_dir / file.filename
+            contents = await file.read()
+            
+            with open(file_path, "wb") as f:
+                f.write(contents)
+            
+            # Process based on file type
+            if file_ext == "csv":
+                data = self._process_csv(str(file_path))
+            else:  # xlsx or xls
+                data = self._process_excel(str(file_path))
+            
+            logger.info(f"✅ File processed: {len(data)} rows")
+            return data, file_ext
+            
+        except ValueError as e:
+            logger.error(f"❌ Validation error: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ File processing failed: {e}")
+            raise ValueError(f"File processing failed: {e}")
+    
+    def _get_file_extension(self, filename: str) -> str:
+        """Extract file extension"""
+        return filename.split(".")[-1].lower()
+    
+    def _process_csv(self, file_path: str) -> list:
+        """Process CSV file using pandas"""
+        try:
+            df = pd.read_csv(file_path)
+            
+            # Replace NaN values with None (becomes null in JSON)
+            df = df.where(pd.notna(df), None)
+        
+            data = df.to_dict("records")
+            logger.info(f"📄 CSV processed: {len(data)} rows, {len(df.columns)} columns")
             return data
         except Exception as e:
-            self.logger.error(f"❌ CSV processing failed: {e}")
-            raise
-    
-    def _process_excel(self, content: bytes) -> List[Dict[str, Any]]:
-        """Process Excel file"""
+            logger.error(f"❌ CSV processing failed: {e}")
+            raise ValueError(f"CSV processing error: {e}")
+
+    def _process_excel(self, file_path: str) -> list:
+        """Process Excel file using pandas"""
         try:
-            if not HAS_OPENPYXL:
-                raise RuntimeError("openpyxl not installed. Install with: uv add openpyxl")
+            df = pd.read_excel(file_path)
             
-            workbook = openpyxl.load_workbook(io.BytesIO(content))
-            sheet = workbook.active
+            # Replace NaN values with None (becomes null in JSON)
+            df = df.where(pd.notna(df), None)
             
-            # Get headers
-            headers = [cell.value for cell in sheet]
-            
-            # Get data
-            data = []
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                if any(cell is not None for cell in row):
-                    row_dict = {}
-                    for header, value in zip(headers, row):
-                        row_dict[header] = value
-                    data.append(row_dict)
-            
-            if not data:
-                raise ValueError("Excel file is empty")
-            
-            self.logger.info(f"✅ Processed Excel: {len(data)} rows")
+            data = df.to_dict("records")
+            logger.info(f"📊 Excel processed: {len(data)} rows, {len(df.columns)} columns")
             return data
         except Exception as e:
-            self.logger.error(f"❌ Excel processing failed: {e}")
-            raise
-    
-    @staticmethod
-    def _try_convert_to_number(value: str) -> Any:
-        """Try converting string to int or float"""
-        if value is None or value == "":
-            return None
-        
-        try:
-            if "." in str(value):
-                return float(value)
-            else:
-                return int(value)
-        except (ValueError, TypeError):
-            return value
-    
-    @staticmethod
-    def get_numeric_columns(data: List[Dict[str, Any]]) -> List[str]:
-        """Get columns that contain numeric data"""
-        if not data:
-            return []
-        
-        numeric_cols = []
-        for key in data.keys():
-            try:
-                for row in data:
-                    if row[key] is not None:
-                        float(row[key])
-                numeric_cols.append(key)
-            except (ValueError, TypeError):
-                pass
-        
-        return numeric_cols
+            logger.error(f"❌ Excel processing failed: {e}")
+            raise ValueError(f"Excel processing error: {e}")
+
+
