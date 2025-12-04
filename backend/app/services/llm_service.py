@@ -128,11 +128,10 @@ class LLMServiceMLX(BaseLLMService):
             model=self.model,
             tokenizer=self.tokenizer,
             prompt=prompt,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            verbose=False
+            max_tokens=self.max_tokens
         )
         return response
+
 
 
 class LLMServiceDockerModelRunner(BaseLLMService):
