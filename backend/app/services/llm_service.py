@@ -154,7 +154,7 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             self.client = httpx.AsyncClient(timeout=self.timeout)
             
             # Test connection with health check
-            response = await self.client.get(f"{self.docker_url}/models")
+            response = await self.client.get(f"{self.docker_url}/api/tags")
             
             if response.status_code == 200:
                 self.is_loaded = True
@@ -181,13 +181,13 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             }
             
             response = await self.client.post(
-                f"{self.docker_url}/chat/completions",
+                f"{self.docker_url}/api/chat/completions",
                 json=payload
             )
             
             if response.status_code == 200:
                 result = response.json()
-                return result["choices"]["message"]["content"]
+                return result["choices"][0]["message"]["content"]
             else:
                 self.logger.error(f"❌ Docker Model Runner error: {response.text}")
                 raise RuntimeError(f"Model Runner error: {response.status_code}")
@@ -236,22 +236,15 @@ class LLMServiceMock(BaseLLMService):
             return f"Mock response: I processed your prompt about '{prompt[:40]}...' - please note I'm in mock mode with no real LLM."
 
 
-def get_llm_service(debug: bool, mlx_config: dict = None, docker_config: dict = None) -> BaseLLMService:
+def get_llm_service(debug: bool, mlx_config: dict = None, docker_config: dict = None, settings=None) -> BaseLLMService:
     """
     Factory function to get appropriate LLM service
-    
-    Args:
-        debug: If True, use MLX; if False, use Docker Model Runner
-        mlx_config: Config dict for MLX (model_name, max_tokens, temperature, device)
-        docker_config: Config dict for Docker Model Runner (model_name, max_tokens, temperature, url, timeout)
-    
-    Returns:
-        Appropriate LLM service instance
+    Fallback chain: MLX → Docker Model Runner → Mock
     """
     
-    if debug:
-        # Try MLX first
-        if HAS_MLX:
+    # Try MLX first
+    if debug and HAS_MLX:
+        try:
             config = mlx_config or {
                 "model_name": "mlx-community/Llama-3.2-3B-Instruct-4bit",
                 "max_tokens": 512,
@@ -260,21 +253,34 @@ def get_llm_service(debug: bool, mlx_config: dict = None, docker_config: dict = 
             }
             logger.info("📌 Mode: MLX (DEBUG=true)")
             return LLMServiceMLX(**config)
-        else:
-            logger.warning("⚠️  MLX not available, falling back to mock")
-            return LLMServiceMock(
-                model_name="mock-mlx",
-                max_tokens=512,
-                temperature=0.7
-            )
-    else:
-        # Use Docker Model Runner
-        config = docker_config or {
-            "model_name": "Llama-3.2-3B-Instruct",
-            "max_tokens": 512,
-            "temperature": 0.7,
-            "docker_url": "http://model-runner.docker.internal/engines/llama.cpp/v1",
-            "timeout": 300
-        }
-        logger.info("📌 Mode: Docker Model Runner (DEBUG=false)")
-        return LLMServiceDockerModelRunner(**config)
+        except Exception as e:
+            logger.warning(f"⚠️  MLX failed: {e}")
+    
+    # Try Docker Model Runner
+    docker_url = None
+    if docker_config:
+        docker_url = docker_config.get("docker_url")
+    elif settings:
+        docker_url = settings.docker_model_runner_url
+    
+    if docker_url:
+        try:
+            config = docker_config or {
+                "model_name": settings.llm_model_name_docker if settings else "llama2",
+                "max_tokens": settings.llm_max_tokens if settings else 512,
+                "temperature": settings.llm_temperature if settings else 0.7,
+                "docker_url": docker_url,
+                "timeout": settings.docker_timeout if settings else 300
+            }
+            logger.info(f"📌 Mode: Docker Model Runner at {docker_url}")
+            return LLMServiceDockerModelRunner(**config)
+        except Exception as e:
+            logger.warning(f"⚠️  Docker Model Runner failed: {e}")
+    
+    # Fallback to mock
+    logger.warning("⚠️  Using MOCK mode (no LLM available)")
+    return LLMServiceMock(
+        model_name="mock",
+        max_tokens=512,
+        temperature=0.7
+    )

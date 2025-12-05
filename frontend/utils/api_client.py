@@ -19,6 +19,7 @@ class APIClient:
     """Client for backend API communication"""
     
     def __init__(self):
+        backend_url = BACKEND_URL
         self.base_url = API_BASE_URL
         self.timeout = TIMEOUT_LONG
     

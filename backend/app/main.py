@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
     
     llm_service = get_llm_service(
         debug=settings.debug,
+        settings=settings,
         mlx_config=mlx_config,
         docker_config=docker_config
     )
