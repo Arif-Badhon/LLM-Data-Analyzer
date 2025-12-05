@@ -128,20 +128,24 @@ async def analyze_data(request: AnalysisRequest):
         
         logger.info(f"📊 Analysis: {request.analysis_type} on {len(request.data)} rows")
         
-        # ✅ KEY FIX 1: Add await - analyzer.analyze() is async
+        # Call analyzer with await
         results = await analyzer.analyze(
             request.data,
             request.analysis_type,
             request.columns
         )
         
-        # ✅ KEY FIX 2: Remove this line - generate_summary() doesn't exist
-        # Don't call: summary = analyzer.generate_summary(results)
+        summary = f"Analysis complete: {request.analysis_type} on {len(request.data)} rows"
         
-        # ✅ KEY FIX 3: Return without summary field
+        import pandas as pd
+        df = pd.DataFrame(request.data)
+        data_shape = df.shape
+        
         return AnalysisResponse(
             analysis_type=request.analysis_type,
             results=results,
+            summary=summary, 
+            data_shape=data_shape, 
             timestamp=datetime.now()
         )
     except ValueError as e:
@@ -150,6 +154,7 @@ async def analyze_data(request: AnalysisRequest):
     except Exception as e:
         logger.error(f"❌ Analysis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
