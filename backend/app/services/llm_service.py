@@ -6,11 +6,14 @@ Dual-mode LLM Service
 """
 import asyncio
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import List, Optional
 import httpx
 
+
 logger = logging.getLogger(__name__)
+
 
 # Import MLX conditionally
 try:
@@ -19,6 +22,7 @@ try:
     HAS_MLX = True
 except ImportError:
     HAS_MLX = False
+
 
 
 class BaseLLMService(ABC):
@@ -43,7 +47,7 @@ class BaseLLMService(ABC):
         pass
     
     async def chat(self, messages: List[dict], system_prompt: str = None) -> str:
-        """Chat interface"""
+        """Chat interface - converts chat format to prompt format"""
         prompt = self._build_prompt(messages, system_prompt)
         return await self.generate(prompt)
     
@@ -61,6 +65,7 @@ class BaseLLMService(ABC):
         
         prompt_parts.append("Assistant: ")
         return "".join(prompt_parts)
+
 
 
 class LLMServiceMLX(BaseLLMService):
@@ -134,17 +139,33 @@ class LLMServiceMLX(BaseLLMService):
 
 
 
+
 class LLMServiceDockerModelRunner(BaseLLMService):
-    """Docker Model Runner implementation - OpenAI-compatible API"""
+    """Docker Model Runner implementation - OpenAI-compatible API
     
-    def __init__(self, model_name: str, max_tokens: int, temperature: float, docker_url: str, timeout: int = 300):
+    Uses stateless HTTP calls to DMR running on host machine.
+    Optimal for Apple Silicon GPU acceleration via llama.cpp Metal backend.
+    """
+    
+    def __init__(
+        self, 
+        model_name: str, 
+        max_tokens: int, 
+        temperature: float, 
+        docker_url: str,
+        timeout: int = 300
+    ):
         super().__init__(model_name, max_tokens, temperature)
         self.docker_url = docker_url.rstrip("/")  # Remove trailing slash
         self.timeout = timeout
         self.client = None
     
     async def load_model(self) -> bool:
-        """Initialize Docker Model Runner connection"""
+        """Initialize Docker Model Runner connection
+        
+        Tests connectivity to the DMR HTTP API endpoint.
+        DMR itself handles model loading on the host.
+        """
         if self.is_loaded:
             return True
         
@@ -156,8 +177,10 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             response = await self.client.get(f"{self.docker_url}/models")
             
             if response.status_code == 200:
-                self.is_loaded = True
+                models = response.json()
                 self.logger.info(f"✅ Docker Model Runner connected")
+                self.logger.info(f"📋 Available models: {models}")
+                self.is_loaded = True
                 return True
             else:
                 self.logger.error(f"❌ Docker Model Runner returned {response.status_code}")
@@ -167,13 +190,17 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             return False
     
     async def generate(self, prompt: str) -> str:
-        """Generate with Docker Model Runner (OpenAI-compatible API)"""
+        """Generate with Docker Model Runner (OpenAI-compatible API)
+        
+        Makes HTTP request to DMR at host.docker.internal:11434
+        Model inference happens on host GPU (Apple Metal backend)
+        """
         if not self.is_loaded:
             raise RuntimeError("Docker Model Runner not connected")
         
         try:
             payload = {
-                "model": self.model_name,  # "ai/llama3.2:1B-Q4_0"
+                "model": self.model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
@@ -238,13 +265,30 @@ class LLMServiceMock(BaseLLMService):
             return f"Mock response: I processed your prompt about '{prompt[:40]}...' - please note I'm in mock mode with no real LLM."
 
 
-def get_llm_service(debug: bool, mlx_config: dict = None, docker_config: dict = None, settings=None) -> BaseLLMService:
+
+def get_llm_service(debug: bool = None, mlx_config: dict = None, docker_config: dict = None, settings=None) -> BaseLLMService:
     """
     Factory function to get appropriate LLM service
-    Fallback chain: MLX → Docker Model Runner → Mock
+    
+    Fallback chain: MLX (DEBUG=true) → Docker Model Runner → Mock
+    
+    Args:
+        debug: Force DEBUG mode (True=MLX, False=Docker). If None, reads from env/settings
+        mlx_config: Manual MLX config dict
+        docker_config: Manual Docker config dict
+        settings: Pydantic Settings object with llm config
+    
+    Returns:
+        BaseLLMService: One of MLX, DockerModelRunner, or Mock implementation
     """
     
-    # Try MLX first
+    # Determine debug mode
+    if debug is None:
+        debug = os.getenv("DEBUG", "false").lower() == "true"
+        if hasattr(settings, "debug"):
+            debug = settings.debug
+    
+    # Try MLX first (if DEBUG=true)
     if debug and HAS_MLX:
         try:
             config = mlx_config or {
@@ -253,31 +297,46 @@ def get_llm_service(debug: bool, mlx_config: dict = None, docker_config: dict = 
                 "temperature": 0.7,
                 "device": "auto"
             }
-            logger.info("📌 Mode: MLX (DEBUG=true)")
+            logger.info("📌 Mode: MLX (DEBUG=true) with Apple Silicon GPU")
             return LLMServiceMLX(**config)
         except Exception as e:
-            logger.warning(f"⚠️  MLX failed: {e}")
+            logger.warning(f"⚠️  MLX failed: {e}, falling back to Docker Model Runner")
     
-    # Try Docker Model Runner
+    # Try Docker Model Runner (Metis pattern)
     docker_url = None
     if docker_config:
         docker_url = docker_config.get("docker_url")
     elif settings:
-        docker_url = settings.docker_model_runner_url
+        docker_url = getattr(settings, "model_runner_url", None)
+    else:
+        docker_url = os.getenv("MODEL_RUNNER_URL")
     
     if docker_url:
         try:
-            config = docker_config or {
-                "model_name": settings.llm_model_name_docker if settings else "llama2",
-                "max_tokens": settings.llm_max_tokens if settings else 512,
-                "temperature": settings.llm_temperature if settings else 0.7,
+            model_name = None
+            if docker_config:
+                model_name = docker_config.get("model_name")
+            elif settings:
+                model_name = getattr(settings, "model_name", None)
+            else:
+                model_name = os.getenv("MODEL_NAME", "llama3.2:1B-Q4_0")
+            
+            config = {
+                "model_name": model_name,
+                "max_tokens": (docker_config or {}).get("max_tokens", 
+                    getattr(settings, "llm_max_tokens", 512) if settings else 512),
+                "temperature": (docker_config or {}).get("temperature", 
+                    getattr(settings, "llm_temperature", 0.7) if settings else 0.7),
                 "docker_url": docker_url,
-                "timeout": settings.docker_timeout if settings else 300
+                "timeout": (docker_config or {}).get("timeout", 
+                    getattr(settings, "docker_timeout", 300) if settings else 300)
             }
             logger.info(f"📌 Mode: Docker Model Runner at {docker_url}")
+            logger.info(f"📌 Model: {config['model_name']}")
+            logger.info(f"✅ Using host GPU acceleration (llama.cpp Metal backend)")
             return LLMServiceDockerModelRunner(**config)
         except Exception as e:
-            logger.warning(f"⚠️  Docker Model Runner failed: {e}")
+            logger.warning(f"⚠️  Docker Model Runner failed: {e}, falling back to Mock")
     
     # Fallback to mock
     logger.warning("⚠️  Using MOCK mode (no LLM available)")
