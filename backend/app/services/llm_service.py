@@ -135,11 +135,11 @@ class LLMServiceMLX(BaseLLMService):
 
 
 class LLMServiceDockerModelRunner(BaseLLMService):
-    """Docker Model Runner implementation (DEBUG=false)"""
+    """Docker Model Runner implementation"""
     
     def __init__(self, model_name: str, max_tokens: int, temperature: float, docker_url: str, timeout: int = 300):
         super().__init__(model_name, max_tokens, temperature)
-        self.docker_url = docker_url
+        self.docker_url = docker_url.rstrip("/")  # Remove trailing slash
         self.timeout = timeout
         self.client = None
     
@@ -150,11 +150,10 @@ class LLMServiceDockerModelRunner(BaseLLMService):
         
         try:
             self.logger.info(f"🔄 Connecting to Docker Model Runner: {self.docker_url}")
-            # Create async HTTP client
             self.client = httpx.AsyncClient(timeout=self.timeout)
             
-            # Test connection with health check
-            response = await self.client.get(f"{self.docker_url}/api/tags")
+            # Correct endpoint: /models (not /api/tags)
+            response = await self.client.get(f"{self.docker_url}/models")
             
             if response.status_code == 200:
                 self.is_loaded = True
@@ -180,16 +179,17 @@ class LLMServiceDockerModelRunner(BaseLLMService):
                 "max_tokens": self.max_tokens,
             }
             
+            # Correct endpoint: /chat/completions
             response = await self.client.post(
-                f"{self.docker_url}/api/chat/completions",
+                f"{self.docker_url}/chat/completions",
                 json=payload
             )
             
             if response.status_code == 200:
                 result = response.json()
-                return result["choices"][0]["message"]["content"]
+                return result["choices"]["message"]["content"]
             else:
-                self.logger.error(f"❌ Docker Model Runner error: {response.text}")
+                self.logger.error(f"❌ Docker Model Runner error: {response.status_code} - {response.text}")
                 raise RuntimeError(f"Model Runner error: {response.status_code}")
         except Exception as e:
             self.logger.error(f"❌ Docker Model Runner generation failed: {e}")
@@ -201,6 +201,7 @@ class LLMServiceDockerModelRunner(BaseLLMService):
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.client:
             await self.client.aclose()
+
 
 
 class LLMServiceMock(BaseLLMService):
