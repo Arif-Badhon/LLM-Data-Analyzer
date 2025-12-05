@@ -60,33 +60,21 @@ class Settings(BaseSettings):
     
     # ===== DOCKER MODEL RUNNER MODE (DEBUG=false) =====
     # Metis pattern: stateless HTTP API to DMR on host
-    model_runner_url: str = Field(
-        default="http://host.docker.internal:11434/v1",
+    runner_url: str = Field(
+        default="http://host.docker.internal:11434/engines/llama.cpp/v1",
         env="MODEL_RUNNER_URL",
         description="Docker Model Runner API endpoint (from containers use host.docker.internal)"
     )
-    model_name: str = Field(
-        default="llama3.2:1B-Q4_0",
+    llm_model: str = Field(
+        default="ai/llama3.2:1B-Q4_0",
         env="MODEL_NAME",
-        description="Model name as shown in 'docker model ls'"
+        description="Model name as OCI reference (e.g., ai/llama3.2:1B-Q4_0)"
     )
     docker_timeout: int = Field(
         default=300,
         env="DOCKER_TIMEOUT",
         description="Timeout for Docker Model Runner requests (seconds)"
     )
-    
-    # ===== BACKWARDS COMPATIBILITY (deprecated) =====
-    # These are kept for backwards compatibility but use new names above
-    @property
-    def docker_model_runner_url(self) -> str:
-        """Backwards compatible alias for model_runner_url"""
-        return self.model_runner_url
-    
-    @property
-    def llm_model_name_docker(self) -> str:
-        """Backwards compatible alias for model_name"""
-        return self.model_name
     
     # ===== DATA PROCESSING =====
     max_file_size_mb: int = Field(
@@ -102,6 +90,8 @@ class Settings(BaseSettings):
         env_file = ".env.local"
         case_sensitive = False
         extra = "allow"
+        # Fix Pydantic warning about protected namespaces
+        protected_namespaces = ('settings_',)
 
 
 @lru_cache

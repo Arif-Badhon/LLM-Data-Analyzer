@@ -35,10 +35,10 @@ async def lifespan(app: FastAPI):
     }
     
     docker_config = {
-        "model_name": settings.llm_model_name_docker,
+        "model_name": settings.llm_model,
         "max_tokens": settings.llm_max_tokens,
         "temperature": settings.llm_temperature,
-        "docker_url": settings.docker_model_runner_url,
+        "docker_url": settings.runner_url,
         "timeout": settings.docker_timeout
     }
     

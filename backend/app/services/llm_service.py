@@ -152,11 +152,11 @@ class LLMServiceDockerModelRunner(BaseLLMService):
         model_name: str, 
         max_tokens: int, 
         temperature: float, 
-        docker_url: str,
+        runner_url: str,
         timeout: int = 300
     ):
         super().__init__(model_name, max_tokens, temperature)
-        self.docker_url = docker_url.rstrip("/")  # Remove trailing slash
+        self.runner_url = runner_url.rstrip("/")  # Remove trailing slash
         self.timeout = timeout
         self.client = None
     
@@ -170,11 +170,11 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             return True
         
         try:
-            self.logger.info(f"🔄 Connecting to Docker Model Runner: {self.docker_url}")
+            self.logger.info(f"🔄 Connecting to Docker Model Runner: {self.runner_url}")
             self.client = httpx.AsyncClient(timeout=self.timeout)
             
             # OpenAI-compatible endpoint: GET /v1/models
-            response = await self.client.get(f"{self.docker_url}/models")
+            response = await self.client.get(f"{self.runner_url}/models")
             
             if response.status_code == 200:
                 models = response.json()
@@ -208,7 +208,7 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             
             # OpenAI-compatible endpoint: POST /v1/chat/completions
             response = await self.client.post(
-                f"{self.docker_url}/chat/completions",
+                f"{self.runner_url}/chat/completions",
                 json=payload
             )
             
@@ -285,7 +285,7 @@ def get_llm_service(debug: bool = None, mlx_config: dict = None, docker_config: 
     # Determine debug mode
     if debug is None:
         debug = os.getenv("DEBUG", "false").lower() == "true"
-        if hasattr(settings, "debug"):
+        if settings and hasattr(settings, "debug"):
             debug = settings.debug
     
     # Try MLX first (if DEBUG=true)
@@ -303,23 +303,23 @@ def get_llm_service(debug: bool = None, mlx_config: dict = None, docker_config: 
             logger.warning(f"⚠️  MLX failed: {e}, falling back to Docker Model Runner")
     
     # Try Docker Model Runner (Metis pattern)
-    docker_url = None
+    runner_url = None
     if docker_config:
-        docker_url = docker_config.get("docker_url")
+        runner_url = docker_config.get("runner_url")
     elif settings:
-        docker_url = getattr(settings, "model_runner_url", None)
+        runner_url = getattr(settings, "runner_url", None)
     else:
-        docker_url = os.getenv("MODEL_RUNNER_URL")
+        runner_url = os.getenv("MODEL_RUNNER_URL")
     
-    if docker_url:
+    if runner_url:
         try:
             model_name = None
             if docker_config:
                 model_name = docker_config.get("model_name")
             elif settings:
-                model_name = getattr(settings, "model_name", None)
+                model_name = getattr(settings, "llm_model", None)
             else:
-                model_name = os.getenv("MODEL_NAME", "llama3.2:1B-Q4_0")
+                model_name = os.getenv("MODEL_NAME", "ai/llama3.2:1B-Q4_0")
             
             config = {
                 "model_name": model_name,
@@ -327,11 +327,11 @@ def get_llm_service(debug: bool = None, mlx_config: dict = None, docker_config: 
                     getattr(settings, "llm_max_tokens", 512) if settings else 512),
                 "temperature": (docker_config or {}).get("temperature", 
                     getattr(settings, "llm_temperature", 0.7) if settings else 0.7),
-                "docker_url": docker_url,
+                "runner_url": runner_url,
                 "timeout": (docker_config or {}).get("timeout", 
                     getattr(settings, "docker_timeout", 300) if settings else 300)
             }
-            logger.info(f"📌 Mode: Docker Model Runner at {docker_url}")
+            logger.info(f"📌 Mode: Docker Model Runner at {runner_url}")
             logger.info(f"📌 Model: {config['model_name']}")
             logger.info(f"✅ Using host GPU acceleration (llama.cpp Metal backend)")
             return LLMServiceDockerModelRunner(**config)
