@@ -13,7 +13,7 @@ st.set_page_config(
 render_sidebar()
 
 st.title("🤖 LLM Data Analyzer")
-st.subtitle("Advanced data analysis with AI assistance")
+st.write("*Advanced data analysis with AI assistance*")
 
 st.divider()
 
@@ -27,7 +27,8 @@ with col1:
     - Get AI-powered insights
     - Real-time responses from LLM
     """)
-    st.page_link("pages/01_Chat.py", label="Go to Chat", icon="💬")
+    if st.button("Go to Chat", key="chat_btn"):
+        st.switch_page("pages/01_Chat.py")
 
 with col2:
     st.subheader("📁 Upload Data")
@@ -36,7 +37,8 @@ with col2:
     - Preview your data
     - View statistics
     """)
-    st.page_link("pages/02_Upload_Data.py", label="Upload Data", icon="📁")
+    if st.button("Upload Data", key="upload_btn"):
+        st.switch_page("pages/02_Upload_Data.py")
 
 st.divider()
 
@@ -50,7 +52,8 @@ with col3:
     - Outlier detection
     - Correlation analysis
     """)
-    st.page_link("pages/03_Analysis.py", label="Run Analysis", icon="📊")
+    if st.button("Run Analysis", key="analysis_btn"):
+        st.switch_page("pages/03_Analysis.py")
 
 with col4:
     st.subheader("🏥 System Status")
@@ -59,7 +62,8 @@ with col4:
     - View LLM model info
     - Monitor system status
     """)
-    st.page_link("pages/04_Health_Check.py", label="Check Status", icon="🏥")
+    if st.button("Check Status", key="status_btn"):
+        st.switch_page("pages/04_Health_Check.py")
 
 st.divider()
 

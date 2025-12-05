@@ -12,11 +12,21 @@ def render_sidebar():
         
         # Navigation
         st.subheader("Navigation")
-        st.page_link("app.py", label="🏠 Home", icon="🏠")
-        st.page_link("pages/01_Chat.py", label="💬 Chat", icon="💬")
-        st.page_link("pages/02_Upload_Data.py", label="📁 Upload Data", icon="📁")
-        st.page_link("pages/03_Analysis.py", label="📊 Analysis", icon="📊")
-        st.page_link("pages/04_Health_Check.py", label="🏥 Health Check", icon="🏥")
+        
+        if st.button("🏠 Home", use_container_width=True):
+            st.switch_page("app.py")
+        
+        if st.button("💬 Chat", use_container_width=True):
+            st.switch_page("pages/01_Chat.py")
+        
+        if st.button("📁 Upload Data", use_container_width=True):
+            st.switch_page("pages/02_Upload_Data.py")
+        
+        if st.button("📊 Analysis", use_container_width=True):
+            st.switch_page("pages/03_Analysis.py")
+        
+        if st.button("🏥 Health Check", use_container_width=True):
+            st.switch_page("pages/04_Health_Check.py")
         
         st.divider()
         
