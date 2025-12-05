@@ -27,8 +27,7 @@ with col1:
     - Get AI-powered insights
     - Real-time responses from LLM
     """)
-    if st.button("Go to Chat", key="chat_btn"):
-        st.switch_page("pages/01_Chat.py")
+    st.markdown("[💬 Go to Chat](pages/01_Chat.py)")
 
 with col2:
     st.subheader("📁 Upload Data")
@@ -37,8 +36,7 @@ with col2:
     - Preview your data
     - View statistics
     """)
-    if st.button("Upload Data", key="upload_btn"):
-        st.switch_page("pages/02_Upload_Data.py")
+    st.markdown("[📁 Upload Data](pages/02_Upload_Data.py)")
 
 st.divider()
 
@@ -52,8 +50,7 @@ with col3:
     - Outlier detection
     - Correlation analysis
     """)
-    if st.button("Run Analysis", key="analysis_btn"):
-        st.switch_page("pages/03_Analysis.py")
+    st.markdown("[📊 Run Analysis](pages/03_Analysis.py)")
 
 with col4:
     st.subheader("🏥 System Status")
@@ -62,8 +59,7 @@ with col4:
     - View LLM model info
     - Monitor system status
     """)
-    if st.button("Check Status", key="status_btn"):
-        st.switch_page("pages/04_Health_Check.py")
+    st.markdown("[🏥 Check Status](pages/04_Health_Check.py)")
 
 st.divider()
 
@@ -73,4 +69,6 @@ st.info("""
 2. **Preview** - Review your data and statistics
 3. **Analyze** - Run analysis and get insights
 4. **Chat** - Ask follow-up questions to the AI
+
+**Navigation**: Use the pages listed above or check the pages folder dropdown in the sidebar!
 """)

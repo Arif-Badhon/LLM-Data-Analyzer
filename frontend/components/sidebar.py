@@ -10,26 +10,6 @@ def render_sidebar():
         
         st.divider()
         
-        # Navigation
-        st.subheader("Navigation")
-        
-        if st.button("🏠 Home", use_container_width=True):
-            st.switch_page("app.py")
-        
-        if st.button("💬 Chat", use_container_width=True):
-            st.switch_page("pages/01_Chat.py")
-        
-        if st.button("📁 Upload Data", use_container_width=True):
-            st.switch_page("pages/02_Upload_Data.py")
-        
-        if st.button("📊 Analysis", use_container_width=True):
-            st.switch_page("pages/03_Analysis.py")
-        
-        if st.button("🏥 Health Check", use_container_width=True):
-            st.switch_page("pages/04_Health_Check.py")
-        
-        st.divider()
-        
         # Backend Status
         st.subheader("Backend Status")
         if st.button("🔄 Check Status"):
