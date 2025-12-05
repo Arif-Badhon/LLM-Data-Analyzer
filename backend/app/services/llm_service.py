@@ -135,7 +135,7 @@ class LLMServiceMLX(BaseLLMService):
 
 
 class LLMServiceDockerModelRunner(BaseLLMService):
-    """Docker Model Runner implementation"""
+    """Docker Model Runner implementation - OpenAI-compatible API"""
     
     def __init__(self, model_name: str, max_tokens: int, temperature: float, docker_url: str, timeout: int = 300):
         super().__init__(model_name, max_tokens, temperature)
@@ -152,7 +152,7 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             self.logger.info(f"🔄 Connecting to Docker Model Runner: {self.docker_url}")
             self.client = httpx.AsyncClient(timeout=self.timeout)
             
-            # Correct endpoint: /models (not /api/tags)
+            # OpenAI-compatible endpoint: GET /v1/models
             response = await self.client.get(f"{self.docker_url}/models")
             
             if response.status_code == 200:
@@ -173,13 +173,13 @@ class LLMServiceDockerModelRunner(BaseLLMService):
         
         try:
             payload = {
-                "model": self.model_name,
+                "model": self.model_name,  # "ai/llama3.2:1B-Q4_0"
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
             
-            # Correct endpoint: /chat/completions
+            # OpenAI-compatible endpoint: POST /v1/chat/completions
             response = await self.client.post(
                 f"{self.docker_url}/chat/completions",
                 json=payload
@@ -187,7 +187,7 @@ class LLMServiceDockerModelRunner(BaseLLMService):
             
             if response.status_code == 200:
                 result = response.json()
-                return result["choices"]["message"]["content"]
+                return result["choices"][0]["message"]["content"]
             else:
                 self.logger.error(f"❌ Docker Model Runner error: {response.status_code} - {response.text}")
                 raise RuntimeError(f"Model Runner error: {response.status_code}")
@@ -201,6 +201,7 @@ class LLMServiceDockerModelRunner(BaseLLMService):
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.client:
             await self.client.aclose()
+
 
 
 
