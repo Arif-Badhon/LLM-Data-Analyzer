@@ -1,250 +1,209 @@
-"""
-Data analysis service - statistical, trend, correlation analysis
-"""
-from typing import List, Dict, Any
+"""Data analysis service"""
 import logging
-import statistics
+from typing import Dict, List, Any
+import pandas as pd
+import numpy as np
 
-try:
-    import numpy as np
-    import pandas as pd
-    from scipy.stats import skew, kurtosis
-    HAS_SCIPY = True
-except ImportError:
-    HAS_SCIPY = False
+logger = logging.getLogger(__name__)
 
 
 class Analyzer:
-    """Perform statistical and trend analysis on data"""
+    """Service for analyzing data"""
     
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.supported_types = [
+            "statistical_summary",
+            "trend_detection",
+            "outlier_detection",
+            "correlation_analysis"
+        ]
     
-    def analyze(self, data: List[Dict[str, Any]], analysis_type: str, columns: List[str] = None) -> Dict[str, Any]:
-        """Dispatch to appropriate analysis method"""
-        analysis_type = analysis_type.lower()
+    async def analyze(
+        self,
+        data: List[Dict],
+        analysis_type: str,
+        columns: List[str] = None
+    ) -> Dict[str, Any]:
+        """Perform data analysis"""
         
-        if analysis_type == "statistical":
-            return self.statistical_analysis(data, columns)
-        elif analysis_type == "correlation":
-            return self.correlation_analysis(data, columns)
-        elif analysis_type == "trend":
-            return self.trend_analysis(data, columns)
-        elif analysis_type == "outliers":
-            return self.outlier_analysis(data, columns)
-        elif analysis_type == "distribution":
-            return self.distribution_analysis(data, columns)
-        elif analysis_type == "summary":
-            return self.summary_analysis(data)
+        logger.info(f"📊 Starting analysis: {analysis_type}")
+        
+        # Validate analysis type
+        if analysis_type not in self.supported_types:
+            raise ValueError(
+                f"Unknown analysis type: {analysis_type}. "
+                f"Supported types: {', '.join(self.supported_types)}"
+            )
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
+        
+        # Select columns if specified
+        if columns:
+            numeric_columns = [col for col in columns if col in df.columns]
         else:
-            raise ValueError(f"Unknown analysis type: {analysis_type}")
+            numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+        
+        logger.info(f"Analyzing columns: {numeric_columns}")
+        
+        # Route to appropriate analysis
+        if analysis_type == "statistical_summary":
+            return await self._statistical_summary(df, numeric_columns)
+        elif analysis_type == "trend_detection":
+            return await self._trend_detection(df, numeric_columns)
+        elif analysis_type == "outlier_detection":
+            return await self._outlier_detection(df, numeric_columns)
+        elif analysis_type == "correlation_analysis":
+            return await self._correlation_analysis(df, numeric_columns)
     
-    def statistical_analysis(self, data: List[Dict[str, Any]], columns: List[str] = None) -> Dict[str, Any]:
-        """Statistical analysis - mean, median, std, min, max"""
+    async def _statistical_summary(self, df: pd.DataFrame, columns: List[str]) -> Dict[str, Any]:
+        """Generate statistical summary"""
         try:
-            numeric_cols = columns or self._get_numeric_columns(data)
-            results = {
-                "mean": {},
-                "median": {},
-                "std_dev": {},
-                "min": {},
-                "max": {},
-                "count": len(data)
+            results = {}
+            
+            for col in columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    results[col] = {
+                        "mean": float(df[col].mean()),
+                        "median": float(df[col].median()),
+                        "std": float(df[col].std()),
+                        "min": float(df[col].min()),
+                        "max": float(df[col].max()),
+                        "count": int(df[col].count())
+                    }
+            
+            logger.info(f"✅ Statistical summary complete for {len(results)} columns")
+            return {
+                "type": "statistical_summary",
+                "results": results,
+                "rows_analyzed": len(df)
             }
-            
-            for col in numeric_cols:
-                values = [row[col] for row in data if row[col] is not None]
-                if values:
-                    results["mean"][col] = round(statistics.mean(values), 2)
-                    results["median"][col] = round(statistics.median(values), 2)
-                    if len(values) > 1:
-                        results["std_dev"][col] = round(statistics.stdev(values), 2)
-                    results["min"][col] = round(min(values), 2)
-                    results["max"][col] = round(max(values), 2)
-            
-            return results
         except Exception as e:
-            self.logger.error(f"Statistical analysis failed: {e}")
+            logger.error(f"❌ Statistical summary failed: {e}")
             raise
     
-    def correlation_analysis(self, data: List[Dict[str, Any]], columns: List[str] = None) -> Dict[str, Any]:
-        """Correlation analysis between numeric columns"""
+    async def _trend_detection(self, df: pd.DataFrame, columns: List[str]) -> Dict[str, Any]:
+        """Detect trends in data"""
         try:
-            if not HAS_SCIPY:
-                raise RuntimeError("pandas and scipy required for correlation analysis")
+            trends = {}
             
-            df = pd.DataFrame(data)
-            numeric_cols = columns or df.select_dtypes(include=[np.number]).columns.tolist()
+            for col in columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    values = df[col].dropna().values
+                    if len(values) > 1:
+                        # Simple trend: compare first half vs second half
+                        mid = len(values) // 2
+                        first_half_mean = np.mean(values[:mid])
+                        second_half_mean = np.mean(values[mid:])
+                        
+                        if second_half_mean > first_half_mean:
+                            trend = "increasing"
+                            trend_strength = ((second_half_mean - first_half_mean) / first_half_mean * 100) if first_half_mean != 0 else 0
+                        elif second_half_mean < first_half_mean:
+                            trend = "decreasing"
+                            trend_strength = ((first_half_mean - second_half_mean) / first_half_mean * 100) if first_half_mean != 0 else 0
+                        else:
+                            trend = "stable"
+                            trend_strength = 0
+                        
+                        trends[col] = {
+                            "trend": trend,
+                            "strength": float(trend_strength),
+                            "first_half_avg": float(first_half_mean),
+                            "second_half_avg": float(second_half_mean)
+                        }
             
-            corr_matrix = df[numeric_cols].corr().round(2)
+            logger.info(f"✅ Trend detection complete for {len(trends)} columns")
+            return {
+                "type": "trend_detection",
+                "results": trends,
+                "rows_analyzed": len(df)
+            }
+        except Exception as e:
+            logger.error(f"❌ Trend detection failed: {e}")
+            raise
+    
+    async def _outlier_detection(self, df: pd.DataFrame, columns: List[str]) -> Dict[str, Any]:
+        """Detect outliers in data"""
+        try:
+            outliers = {}
             
-            # Find significant correlations
-            significant_pairs = []
-            for i, col1 in enumerate(numeric_cols):
-                for col2 in numeric_cols[i+1:]:
-                    corr_value = corr_matrix.loc[col1, col2]
-                    if abs(corr_value) > 0.5:  # Threshold
-                        significant_pairs.append({
-                            "col1": col1,
-                            "col2": col2,
+            for col in columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    Q1 = df[col].quantile(0.25)
+                    Q3 = df[col].quantile(0.75)
+                    IQR = Q3 - Q1
+                    
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    outlier_mask = (df[col] < lower_bound) | (df[col] > upper_bound)
+                    outlier_count = outlier_mask.sum()
+                    outlier_indices = df[outlier_mask].index.tolist()
+                    
+                    outliers[col] = {
+                        "count": int(outlier_count),
+                        "percentage": float(outlier_count / len(df) * 100),
+                        "lower_bound": float(lower_bound),
+                        "upper_bound": float(upper_bound),
+                        "outlier_indices": outlier_indices[:10]  # First 10
+                    }
+            
+            logger.info(f"✅ Outlier detection complete for {len(outliers)} columns")
+            return {
+                "type": "outlier_detection",
+                "results": outliers,
+                "rows_analyzed": len(df)
+            }
+        except Exception as e:
+            logger.error(f"❌ Outlier detection failed: {e}")
+            raise
+    
+    async def _correlation_analysis(self, df: pd.DataFrame, columns: List[str]) -> Dict[str, Any]:
+        """Analyze correlations between columns"""
+        try:
+            # Get numeric data
+            numeric_df = df[columns].select_dtypes(include=[np.number])
+            
+            if len(numeric_df.columns) < 2:
+                return {
+                    "type": "correlation_analysis",
+                    "results": {},
+                    "message": "Need at least 2 numeric columns for correlation analysis",
+                    "rows_analyzed": len(df)
+                }
+            
+            # Calculate correlation matrix
+            corr_matrix = numeric_df.corr()
+            
+            # Find strong correlations
+            strong_correlations = []
+            for i in range(len(corr_matrix.columns)):
+                for j in range(i+1, len(corr_matrix.columns)):
+                    col_i = corr_matrix.columns[i]
+                    col_j = corr_matrix.columns[j]
+                    corr_value = corr_matrix.iloc[i, j]
+                    
+                    if abs(corr_value) > 0.5:  # Strong correlation threshold
+                        strong_correlations.append({
+                            "column_1": col_i,
+                            "column_2": col_j,
                             "correlation": float(corr_value)
                         })
             
+            logger.info(f"✅ Correlation analysis complete with {len(strong_correlations)} strong correlations")
             return {
-                "matrix": corr_matrix.to_dict(),
-                "significant_pairs": significant_pairs
+                "type": "correlation_analysis",
+                "results": {
+                    "strong_correlations": strong_correlations,
+                    "correlation_matrix": corr_matrix.to_dict()
+                },
+                "rows_analyzed": len(df)
             }
         except Exception as e:
-            self.logger.error(f"Correlation analysis failed: {e}")
+            logger.error(f"❌ Correlation analysis failed: {e}")
             raise
-    
-    def trend_analysis(self, data: List[Dict[str, Any]], columns: List[str] = None) -> Dict[str, Any]:
-        """Trend analysis - increasing, decreasing, stable"""
-        try:
-            numeric_cols = columns or self._get_numeric_columns(data)
-            trends = {}
-            trend_strength = {}
-            
-            for col in numeric_cols:
-                values = [row[col] for row in data if row[col] is not None]
-                if len(values) > 2:
-                    # Simple trend: compare first half vs second half
-                    mid = len(values) // 2
-                    first_half_avg = statistics.mean(values[:mid])
-                    second_half_avg = statistics.mean(values[mid:])
-                    
-                    if second_half_avg > first_half_avg * 1.05:
-                        trends[col] = "increasing"
-                        strength = (second_half_avg - first_half_avg) / first_half_avg
-                    elif second_half_avg < first_half_avg * 0.95:
-                        trends[col] = "decreasing"
-                        strength = (first_half_avg - second_half_avg) / first_half_avg
-                    else:
-                        trends[col] = "stable"
-                        strength = 0.0
-                    
-                    trend_strength[col] = round(strength, 2)
-            
-            return {
-                "trends": trends,
-                "trend_strength": trend_strength
-            }
-        except Exception as e:
-            self.logger.error(f"Trend analysis failed: {e}")
-            raise
-    
-    def outlier_analysis(self, data: List[Dict[str, Any]], columns: List[str] = None) -> Dict[str, Any]:
-        """Outlier detection using IQR method"""
-        try:
-            numeric_cols = columns or self._get_numeric_columns(data)
-            outliers = {}
-            total_outliers = 0
-            
-            for col in numeric_cols:
-                values = sorted([row[col] for row in data if row[col] is not None])
-                if len(values) > 4:
-                    q1 = values[len(values) // 4]
-                    q3 = values[3 * len(values) // 4]
-                    iqr = q3 - q1
-                    lower_bound = q1 - 1.5 * iqr
-                    upper_bound = q3 + 1.5 * iqr
-                    
-                    col_outliers = [v for v in values if v < lower_bound or v > upper_bound]
-                    outliers[col] = col_outliers
-                    total_outliers += len(col_outliers)
-            
-            return {
-                "outliers": outliers,
-                "outlier_count": total_outliers,
-                "outlier_percentage": round((total_outliers / len(data)) * 100, 2) if data else 0
-            }
-        except Exception as e:
-            self.logger.error(f"Outlier analysis failed: {e}")
-            raise
-    
-    def distribution_analysis(self, data: List[Dict[str, Any]], columns: List[str] = None) -> Dict[str, Any]:
-        """Distribution analysis - skewness, kurtosis"""
-        try:
-            if not HAS_SCIPY:
-                return {"error": "scipy required for distribution analysis"}
-            
-            numeric_cols = columns or self._get_numeric_columns(data)
-            distributions = {}
-            skewness = {}
-            kurt = {}
-            
-            for col in numeric_cols:
-                values = [row[col] for row in data if row[col] is not None]
-                if len(values) > 2:
-                    distributions[col] = {
-                        "min": round(min(values), 2),
-                        "max": round(max(values), 2),
-                        "range": round(max(values) - min(values), 2)
-                    }
-                    skewness[col] = round(float(skew(values)), 2)
-                    kurt[col] = round(float(kurtosis(values)), 2)
-            
-            return {
-                "distributions": distributions,
-                "skewness": skewness,
-                "kurtosis": kurt
-            }
-        except Exception as e:
-            self.logger.error(f"Distribution analysis failed: {e}")
-            raise
-    
-    def summary_analysis(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Summary of data"""
-        try:
-            if not data:
-                return {"error": "No data"}
-            
-            cols = list(data.keys())
-            return {
-                "total_rows": len(data),
-                "total_columns": len(cols),
-                "columns": cols,
-                "data_types": self._infer_types(data)
-            }
-        except Exception as e:
-            self.logger.error(f"Summary analysis failed: {e}")
-            raise
-    
-    @staticmethod
-    def _get_numeric_columns(data: List[Dict[str, Any]]) -> List[str]:
-        """Get numeric columns"""
-        if not data:
-            return []
-        
-        numeric = []
-        for key in data.keys():
-            try:
-                for row in data:
-                    if row[key] is not None:
-                        float(row[key])
-                numeric.append(key)
-            except (ValueError, TypeError):
-                pass
-        return numeric
-    
-    @staticmethod
-    def _infer_types(data: List[Dict[str, Any]]) -> Dict[str, str]:
-        """Infer column data types"""
-        types = {}
-        if not data:
-            return types
-        
-        for key in data.keys():
-            try:
-                for row in data:
-                    if row[key] is not None:
-                        float(row[key])
-                types[key] = "numeric"
-            except (ValueError, TypeError):
-                types[key] = "string"
-        
-        return types
-    
-    def generate_summary(self, results: Dict[str, Any]) -> str:
-        """Generate human-readable summary"""
-        return f"Analysis completed with {len(results)} metrics."
+
+
+# Global analyzer instance
+analyzer = Analyzer()
