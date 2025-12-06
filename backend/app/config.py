@@ -92,6 +92,11 @@ class Settings(BaseSettings):
         extra = "allow"
         # Fix Pydantic warning about protected namespaces
         protected_namespaces = ('settings_',)
+    
+    @property
+    def llm_model_name_docker(self) -> str:
+        """Alias for llm_model (Docker Model Runner)"""
+        return self.llm_model
 
 
 @lru_cache
